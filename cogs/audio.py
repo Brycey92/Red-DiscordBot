@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 import asyncio
-import threading
+import multiprocessing
 import os
 from random import choice as rndchoice
 from random import shuffle
@@ -55,6 +55,7 @@ class Audio:
         self.playlist = []
         self.current = -1 #current track index in self.playlist
         self.downloader = {"DONE" : False, "TITLE" : False, "ID" : False, "URL" : False, "DURATION" : False, "DOWNLOADING" : False}
+        self.stopDownload = False
         self.skip_votes = []
         self.cleanup_timer = int(time.perf_counter())
         self.past_titles = [] # This is to prevent the audio module from setting the status to None if a status other than a track's title gets set
@@ -253,7 +254,13 @@ class Audio:
                 self.music_player.paused = False
                 self.music_player.stop()
 
-
+    @commands.command(pass_context=True, aliases=["abortdl", "canceldl"], no_pm=True)
+    async def stopdl(self, ctx):
+        """Stops an active download
+        """
+        msg = ctx.message
+        if self.downloader["DOWNLOADING"]: self.stopDownload = True
+        else: await self.bot.say("Nothing is downloading.")
 
     @commands.command(pass_context=True, no_pm=True)
     async def stop(self, ctx):
@@ -272,6 +279,7 @@ class Audio:
         self.queue = []
         self.playlist = []
         self.current = -1
+        if self.downloader["DOWNLOADING"]: self.stopDownload = True
         if self.music_player.is_playing(): self.music_player.stop()
         await asyncio.sleep(1)
         if self.bot.voice: await self.bot.voice.disconnect()
@@ -528,13 +536,31 @@ class Audio:
         self.downloader = {"DONE" : False, "TITLE" : False, "ID" : False, "URL": False, "DURATION" : False, "DOWNLOADING" : False}
         if "https://" in link or "http://" in link or "[SEARCH:]" in link:
             path = "data/audio/cache/"
-            t = threading.Thread(target=self.get_video, args=(link,self,))
+            t = multiprocessing.Process(target=self.get_video, args=(link,self,))
             t.start()
         else: #local
             path = ""
             self.downloader = {"DONE" : True, "TITLE" : link, "ID" : link, "URL": False, "DURATION" : False, "DOWNLOADING" : False}
         while not self.downloader["DONE"]:
-            await asyncio.sleep(1)
+            if self.stopDownload:
+                t.terminate()
+                yt = youtube_dl.YoutubeDL(youtube_dl_options)
+                if "[SEARCH:]" not in link:
+                    v = yt.extract_info(link, download=False)
+                else:
+                    link = link.replace("[SEARCH:]", "")
+                    link = "https://youtube.com/watch?v=" + yt.extract_info(link, download=False)["entries"][0]["id"]
+                    v = yt.extract_info(link, download=False)
+                if os.path.isfile("data/audio/cache/" + v["id"]):
+                    try:
+                        os.unlink("data/audio/cache/" + v["id"])
+                    except PermissionError:
+                        pass
+                self.downloader = {"DONE" : True, "TITLE" : False, "ID" : False, "URL" : False, "DURATION" : False, "DOWNLOADING" : False}
+                self.stopDownload = False
+                await self.bot.say("The active download has been stopped.")
+            else:
+                await asyncio.sleep(1)
         if self.downloader["ID"]:
             try:
                 if self.music_player.is_playing(): self.music_player.stop()
